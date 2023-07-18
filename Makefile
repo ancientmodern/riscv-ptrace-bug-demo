@@ -1,6 +1,6 @@
 CC	:= riscv64-unknown-linux-gnu-gcc
 LD	:= riscv64-unknown-linux-gnu-ld
-CFLAGS ?= -g -Wall -Werror
+CFLAGS	?= -g -Wall -Werror
 
 all: victim spy
 

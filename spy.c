@@ -10,18 +10,12 @@
 #include <asm/ptrace.h>
 #include <errno.h>
 
-#define EBREAK_SIZE 4
-
-const char code_ebreak[] = {
-	0x73, 0x00, 0x10, 0x00 /* ebreak */
-};
-
 static inline int chk(int fd, int val)
 {
 	int v = 0;
 
 	if (read(fd, &v, sizeof(v)) != sizeof(v)) {
-		fprintf(stderr, "read failed\n");
+		fprintf(stderr, "Error: read failed\n");
 	}
 	printf("%d, want %d\n", v, val);
 	return v == val;
@@ -33,15 +27,15 @@ int interrupt_task(int pid)
 
 	ret = ptrace(PTRACE_SEIZE, pid, NULL, NULL);
 	if (ret) {
-		fprintf(stderr, "Unable to interrupt task: %d (%s)\n", pid, strerror(errno));
+		fprintf(stderr, "Error: unable to interrupt task: %d (%s)\n", pid, strerror(errno));
 		return ret;
 	}
 
 	ret = ptrace(PTRACE_INTERRUPT, pid, NULL, NULL);
 	if (ret < 0) {
-		fprintf(stderr, "SEIZE %d: can't interrupt task: %s\n", pid, strerror(errno));
+		fprintf(stderr, "Error: SEIZE %d: can't interrupt task: %s\n", pid, strerror(errno));
 		if (ptrace(PTRACE_DETACH, pid, NULL, NULL))
-			fprintf(stderr, "Unable to detach from %d\n", pid);
+			fprintf(stderr, "Error: unable to detach from %d\n", pid);
 	}
 
 	return ret;
@@ -50,7 +44,7 @@ int interrupt_task(int pid)
 int resume_task(int pid)
 {
 	if (ptrace(PTRACE_DETACH, pid, NULL, NULL)) {
-		fprintf(stderr, "Unable to detach from %d\n", pid);
+		fprintf(stderr, "Error: unable to detach from %d\n", pid);
 		return -1;
 	}
 
@@ -77,31 +71,38 @@ int ptrace_set_regs(int pid, struct user_regs_struct *regs)
 	return ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &iov);
 }
 
+#define CODE_EBREAK 0x00100073UL
+
 int magic(int pid)
 {
 	int ret, status;
-	unsigned long new_pc = 0x10000UL, code_orig, code_ebreak = 0x00100073UL;
+	unsigned long new_pc = 0x10000UL, code_orig;
 	struct user_regs_struct orig_regs, regs;
 
+	printf("\tCheckpoint original regs and instruction\n");
 	ret = ptrace_get_regs(pid, &regs);
 	ret = ptrace_get_regs(pid, &orig_regs);
+	code_orig = ptrace(PTRACE_PEEKDATA, pid, new_pc, NULL);
+	printf("\tPTRACE_PEEKDATA return value: %d, errno is: %s\n", ret, strerror(errno));
 
+	printf("\tSet new regs (pc, a0, a7) and ebreak\n");
 	regs.pc = new_pc;
 	regs.a7 = __NR_getpid;
 	regs.a0 = 0;
 	ret = ptrace_set_regs(pid, &regs);
+	ret = ptrace(PTRACE_POKEDATA, pid, new_pc, CODE_EBREAK);
+	printf("\tPTRACE_POKEDATA return value: %d, errno is: %s\n", ret, strerror(errno));
 
-	code_orig = ptrace(PTRACE_PEEKDATA, pid, new_pc, NULL);
-	ret = ptrace(PTRACE_POKEDATA, pid, new_pc, (void *)code_ebreak);
-
-	printf("Running PTRACE_CONT in task %d\n", pid);
+	printf("\tRunning PTRACE_CONT in task %d\n", pid);
 	ret = ptrace(PTRACE_CONT, pid, NULL, NULL);
-	printf("ptrace return value: %d, errno is: %s\n", ret, strerror(errno));
+	printf("\tPTRACE_CONT return value: %d, errno is: %s\n", ret, strerror(errno));
 
 	ret = wait4(pid, &status, __WALL, NULL);
 
+	printf("\tRestore original regs and instruction\n");
 	ret = ptrace_set_regs(pid, &orig_regs);
 	ret = ptrace(PTRACE_POKEDATA, pid, new_pc, (void *)code_orig);
+	printf("\tPTRACE_POKEDATA return value: %d, errno is: %s\n", ret, strerror(errno));
 
 	return ret;
 }
@@ -147,20 +148,20 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	printf("Checking the victim session to be %d\n", sid);
+	printf("First kick: Checking the victim session to be %d\n", sid);
 	pass = chk(p_out[0], sid);
 	if (!pass)
 		return 1;
 
-	printf("Interrupting task %d\n", pid);
+	printf("\nInterrupting task %d\n", pid);
 	ret = interrupt_task(pid);
-	printf("ptrace return value: %d, errno is: %s\n", ret, strerror(errno));
+	printf("Interrupt_task return value: %d, errno is: %s\n", ret, strerror(errno));
 
 	ret = magic(pid);
 
 	printf("Resuming task %d\n", pid);
 	ret = resume_task(pid);
-	printf("ptrace return value: %d, errno is: %s\n", ret, strerror(errno));
+	printf("Resume_task return value: %d, errno is: %s\n", ret, strerror(errno));
 
 	/*
 	 * Kick the victim again so it tells new session
@@ -173,12 +174,12 @@ int main(int argc, char **argv)
 	/*
 	 * Stop the victim and check the intrusion went well
 	 */
-	printf("Closing victim stdin\n");
+	printf("\nClosing victim stdin\n");
 	close(p_in[1]);
 	printf("Waiting for victim to die\n");
 	wait(NULL);
 
-	printf("Checking the new session to be %d\n", sid);
+	printf("Final kick: Checking the new session to be %d\n", sid);
 	pass = chk(p_out[0], sid);
 
 	if (pass)
