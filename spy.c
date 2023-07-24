@@ -10,7 +10,7 @@
 #include <asm/ptrace.h>
 #include <errno.h>
 
-static inline int chk(int fd, int val)
+static inline int check(int fd, int val)
 {
 	int v = 0;
 
@@ -73,7 +73,15 @@ int ptrace_set_regs(int pid, struct user_regs_struct *regs)
 
 #define CODE_EBREAK 0x00100073UL
 
-int magic(int pid)
+/*
+* This function performs five key steps:
+* 	1. Backs up the original registers and instruction at new_pc using GETREGSET and PEEKDATA
+* 	2. Sets new registers (in this case, pc, a0, a7) and injects an `ebreak` at new_pc using SETREGSET and POKEDATA
+*	3. Executes `ebreak` in the victim with PTRACE_CONT, which then returns control to the tracer
+*	4. The tracer waits until the victim has finished execution
+*	5. Restores the original registers and instruction at new_pc using SETREGSET and POKEDATA
+*/
+int inject_ebreak_and_restore_state(int pid)
 {
 	int ret, status;
 	unsigned long new_pc = 0x10000UL, code_orig;
@@ -149,16 +157,25 @@ int main(int argc, char **argv)
 	}
 
 	printf("First kick: Checking the victim session to be %d\n", sid);
-	pass = chk(p_out[0], sid);
+	pass = check(p_out[0], sid);
 	if (!pass)
 		return 1;
 
+	/*
+	 * Use ptrace to seize and interrupt the victim
+	 */
 	printf("\nInterrupting task %d\n", pid);
 	ret = interrupt_task(pid);
 	printf("Interrupt_task return value: %d, errno is: %s\n", ret, strerror(errno));
 
-	ret = magic(pid);
+	/*
+	 * Do some bad things in the victim process
+	 */
+	ret = inject_ebreak_and_restore_state(pid);
 
+	/*
+	 * Use ptrace to detach the victim
+	 */
 	printf("Resuming task %d\n", pid);
 	ret = resume_task(pid);
 	printf("Resume_task return value: %d, errno is: %s\n", ret, strerror(errno));
@@ -180,7 +197,7 @@ int main(int argc, char **argv)
 	wait(NULL);
 
 	printf("Final kick: Checking the new session to be %d\n", sid);
-	pass = chk(p_out[0], sid);
+	pass = check(p_out[0], sid);
 
 	if (pass)
 		printf("All OK\n");
