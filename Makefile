@@ -1,6 +1,10 @@
-CC	:= riscv64-unknown-linux-gnu-gcc
-LD	:= riscv64-unknown-linux-gnu-ld
+ARCH ?= $(shell uname -m)
+CROSS_COMPILE ?= 
+
+CC	:= $(CROSS_COMPILE)gcc
+LD	:= $(CROSS_COMPILE)ld
 CFLAGS	?= -g -Wall -Werror
+CFLAGS	+= -DARCH_$(ARCH)
 
 all: victim spy
 

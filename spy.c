@@ -17,7 +17,7 @@ static inline int check(int fd, int val)
 	if (read(fd, &v, sizeof(v)) != sizeof(v)) {
 		fprintf(stderr, "Error: read failed\n");
 	}
-	printf("%d, want %d\n", v, val);
+	printf("Check: %d, want %d\n", v, val);
 	return v == val;
 }
 
@@ -51,27 +51,70 @@ int resume_task(int pid)
 	return 0;
 }
 
-int ptrace_get_regs(int pid, struct user_regs_struct *regs)
+#ifdef ARCH_x86_64
+
+typedef struct user_regs_struct {
+	unsigned long r15;
+	unsigned long r14;
+	unsigned long r13;
+	unsigned long r12;
+	unsigned long bp;
+	unsigned long bx;
+	unsigned long r11;
+	unsigned long r10;
+	unsigned long r9;
+	unsigned long r8;
+	unsigned long ax;
+	unsigned long cx;
+	unsigned long dx;
+	unsigned long si;
+	unsigned long di;
+	unsigned long orig_ax;
+	unsigned long ip;
+	unsigned long cs;
+	unsigned long flags;
+	unsigned long sp;
+	unsigned long ss;
+	unsigned long fs_base;
+	unsigned long gs_base;
+	unsigned long ds;
+	unsigned long es;
+	unsigned long fs;
+	unsigned long gs;
+} user_regs_struct_t;
+#define CODE_BREAK 0xCCCCCCCCUL
+
+#elif defined(ARCH_aarch64)
+
+typedef struct user_pt_regs user_regs_struct_t;
+#define CODE_BREAK 0xd4200000UL
+
+#elif defined(ARCH_riscv64)
+
+typedef struct user_regs_struct user_regs_struct_t;
+#define CODE_BREAK 0x00100073UL
+
+#endif
+
+int ptrace_get_regs(int pid, user_regs_struct_t *regs)
 {
 	struct iovec iov;
 
 	iov.iov_base = regs;
-	iov.iov_len = sizeof(struct user_regs_struct);
+	iov.iov_len = sizeof(user_regs_struct_t);
 
 	return ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov);
 }
 
-int ptrace_set_regs(int pid, struct user_regs_struct *regs)
+int ptrace_set_regs(int pid, user_regs_struct_t *regs)
 {
 	struct iovec iov;
 
 	iov.iov_base = regs;
-	iov.iov_len = sizeof(struct user_regs_struct);
+	iov.iov_len = sizeof(user_regs_struct_t);
 
 	return ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &iov);
 }
-
-#define CODE_EBREAK 0x00100073UL
 
 /*
 * This function performs five key steps:
@@ -85,7 +128,7 @@ int inject_ebreak_and_restore_state(int pid)
 {
 	int ret, status;
 	unsigned long new_pc = 0x10000UL, code_orig;
-	struct user_regs_struct orig_regs, regs;
+	user_regs_struct_t orig_regs, regs;
 
 	printf("\tCheckpoint original regs and instruction\n");
 	ret = ptrace_get_regs(pid, &regs);
@@ -94,11 +137,20 @@ int inject_ebreak_and_restore_state(int pid)
 	printf("\tPTRACE_PEEKDATA return value: %d, errno is: %s\n", ret, strerror(errno));
 
 	printf("\tSet new regs (pc, a0, a7) and ebreak\n");
+#ifdef ARCH_x86_64
+	regs.ip = new_pc;
+	regs.ax = 0;
+#elif defined(ARCH_aarch64)
+	regs.pc = new_pc;
+	regs.regs[0] = 0;
+#elif defined(ARCH_riscv64)
 	regs.pc = new_pc;
 	regs.a7 = __NR_getpid;
 	regs.a0 = 0;
+#endif
+
 	ret = ptrace_set_regs(pid, &regs);
-	ret = ptrace(PTRACE_POKEDATA, pid, new_pc, CODE_EBREAK);
+	ret = ptrace(PTRACE_POKEDATA, pid, new_pc, CODE_BREAK);
 	printf("\tPTRACE_POKEDATA return value: %d, errno is: %s\n", ret, strerror(errno));
 
 	printf("\tRunning PTRACE_CONT in task %d\n", pid);
@@ -156,10 +208,11 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	printf("First kick: Checking the victim session to be %d\n", sid);
+	printf("First kick: Checking the victim sid to be %d\n", sid);
 	pass = check(p_out[0], sid);
 	if (!pass)
 		return 1;
+	printf("First kick: PASS\n");
 
 	/*
 	 * Use ptrace to seize and interrupt the victim
@@ -181,7 +234,7 @@ int main(int argc, char **argv)
 	printf("Resume_task return value: %d, errno is: %s\n", ret, strerror(errno));
 
 	/*
-	 * Kick the victim again so it tells new session
+	 * Kick the victim again to check if it's good after resuming
 	 */
 	if (write(p_in[1], &i, sizeof(i)) != sizeof(i)) {
 		fprintf(stderr, "write to pipe failed\n");
@@ -196,11 +249,11 @@ int main(int argc, char **argv)
 	printf("Waiting for victim to die\n");
 	wait(NULL);
 
-	printf("Final kick: Checking the new session to be %d\n", sid);
+	printf("Final kick: Checking the victim sid still to be %d\n", sid);
 	pass = check(p_out[0], sid);
 
 	if (pass)
-		printf("All OK\n");
+		printf("All PASS\n");
 	else
 		printf("Something went WRONG\n");
 
