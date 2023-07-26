@@ -9,6 +9,7 @@
 #include <linux/elf.h>
 #include <asm/ptrace.h>
 #include <errno.h>
+#include <assert.h>
 
 static inline int check(int fd, int val)
 {
@@ -49,6 +50,41 @@ int resume_task(int pid)
 	}
 
 	return 0;
+}
+
+/*
+ * Find first executable VMA that would fit the initial
+ * syscall injection.
+ */
+static unsigned long find_executable_area(int pid)
+{
+	char aux[128];
+	FILE *f;
+	unsigned long ret = -1;
+
+	sprintf(aux, "/proc/%d/maps", pid);
+	f = fopen(aux, "r");
+	if (!f)
+		goto out;
+
+	while (fgets(aux, sizeof(aux), f)) {
+		unsigned long start, end;
+		char *f;
+
+		start = strtoul(aux, &f, 16);
+		end = strtoul(f + 1, &f, 16);
+
+		/* f now points at " rwx" (yes, with space) part */
+		if (f[3] == 'x') {
+			assert(end - start >= 4096);
+			ret = start;
+			break;
+		}
+	}
+
+	fclose(f);
+out:
+	return ret;
 }
 
 #ifdef ARCH_x86_64
@@ -127,16 +163,16 @@ int ptrace_set_regs(int pid, user_regs_struct_t *regs)
 int inject_ebreak_and_restore_state(int pid)
 {
 	int ret, status;
-	unsigned long new_pc = 0x10000UL, code_orig;
+	unsigned long new_pc = find_executable_area(pid), code_orig;
 	user_regs_struct_t orig_regs, regs;
 
-	printf("\tCheckpoint original regs and instruction\n");
+	printf("\tCheckpoint original regs and instruction, new_pc = %lu\n", new_pc);
 	ret = ptrace_get_regs(pid, &regs);
 	ret = ptrace_get_regs(pid, &orig_regs);
 	code_orig = ptrace(PTRACE_PEEKDATA, pid, new_pc, NULL);
 	printf("\tPTRACE_PEEKDATA return value: %d, errno is: %s\n", ret, strerror(errno));
 
-	printf("\tSet new regs (pc, a0, a7) and ebreak\n");
+	printf("\tSet new regs (pc, a0) and ebreak\n");
 #ifdef ARCH_x86_64
 	regs.ip = new_pc;
 	regs.ax = 0;
@@ -145,7 +181,6 @@ int inject_ebreak_and_restore_state(int pid)
 	regs.regs[0] = 0;
 #elif defined(ARCH_riscv64)
 	regs.pc = new_pc;
-	regs.a7 = __NR_getpid;
 	regs.a0 = 0;
 #endif
 
