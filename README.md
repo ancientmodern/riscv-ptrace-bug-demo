@@ -1,6 +1,8 @@
-# RISC-V Ptrace/Signal Bug Demo
+# Patch Applied 🎉 RISC-V Ptrace/Signal Bug Demo
 
-Welcome to this demo of a kernel bug (?) affecting ptrace in the Linux 6.4 kernel on RISC-V, resulting in different bahavior compared with x86 and arm64. This README shows the reproduction and analysis of this issue, where a blocking syscall such as `read()` doesn't restart properly after being interrupted by ptrace.
+**🚀 Update: This patch has been applied to the RISC-V Linux kernel, which is my first one! Check out the details in the [commit page](https://git.kernel.org/pub/scm/linux/kernel/git/riscv/linux.git/commit/?id=ce4f78f1b53d).**
+
+Welcome to this demo of a kernel bug affecting ptrace in the Linux kernel <= 6.6 on RISC-V, resulting in different bahavior compared with x86 and arm64. This README shows the reproduction and analysis of this issue, where a blocking syscall such as `read()` doesn't restart properly after being interrupted by ptrace.
 
 ## Reproducing the Bug
 Follow the steps below to replicate this issue:
